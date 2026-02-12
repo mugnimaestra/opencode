@@ -1278,6 +1278,45 @@ export function schema(model: Provider.Model, schema: JSONSchema7): JSONSchema7 
     }
   }
 
+  // Universal: ensure all array types have valid items (required by OpenAI, Copilot, Azure, etc.)
+  const hasCombinerNode = (node: any) =>
+    node !== null &&
+    typeof node === "object" &&
+    !Array.isArray(node) &&
+    (Array.isArray(node.anyOf) || Array.isArray(node.oneOf) || Array.isArray(node.allOf))
+
+  const sanitizeArrayItems = (obj: any): any => {
+    if (obj === null || typeof obj !== "object") return obj
+    if (Array.isArray(obj)) return obj.map(sanitizeArrayItems)
+
+    const result: any = {}
+    for (const [key, value] of Object.entries(obj)) {
+      if (typeof value === "object" && value !== null) {
+        result[key] = sanitizeArrayItems(value)
+      } else {
+        result[key] = value
+      }
+    }
+
+    if (result.type === "array" && !hasCombinerNode(result)) {
+      if (result.items == null) {
+        result.items = {}
+      }
+      if (
+        typeof result.items === "object" &&
+        !Array.isArray(result.items) &&
+        !result.items.type &&
+        !hasCombinerNode(result.items)
+      ) {
+        result.items.type = "string"
+      }
+    }
+
+    return result
+  }
+
+  schema = sanitizeArrayItems(schema)
+
   // Convert integer enums to string enums for Google/Gemini
   if (model.providerID === "google" || model.api.id.includes("gemini")) {
     const isPlainObject = (node: unknown): node is Record<string, any> =>

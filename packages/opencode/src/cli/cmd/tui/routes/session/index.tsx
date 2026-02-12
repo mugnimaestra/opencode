@@ -194,10 +194,22 @@ export function Session() {
   const promptRef = usePromptRef()
   const session = createMemo(() => sync.session.get(route.sessionID))
   const children = createMemo(() => {
-    const parentID = session()?.parentID ?? session()?.id
-    return sync.data.session
-      .filter((x) => x.parentID === parentID || x.id === parentID)
-      .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    const rootID = session()?.parentID ?? session()?.id
+    const all = sync.data.session
+    const result = all.filter((x) => x.id === rootID)
+    const seen = new Set(result.map((x) => x.id))
+    const queue = [...seen]
+    while (queue.length) {
+      const id = queue.shift()!
+      for (const s of all) {
+        if (s.parentID === id && !seen.has(s.id)) {
+          seen.add(s.id)
+          result.push(s)
+          queue.push(s.id)
+        }
+      }
+    }
+    return result.toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   })
   const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
   const foregroundTasks = createMemo(() =>
@@ -449,15 +461,15 @@ export function Session() {
 
   function moveFirstChild() {
     if (children().length === 1) return
-    const next = children().find((x) => !!x.parentID)
+    const next = children().find((x) => x.parentID === session()?.id)
     if (next) enterChild(next.id)
   }
 
   function moveChild(direction: number) {
     if (children().length === 1) return
 
-    const sessions = children().filter((x) => !!x.parentID)
-    let next = sessions.findIndex((x) => x.id === session()?.id) - direction
+    const sessions = children().filter((x) => x.parentID === session()?.parentID)
+    let next = sessions.findIndex((x) => x.id === session()?.id) + direction
 
     if (next >= sessions.length) next = 0
     if (next < 0) next = sessions.length - 1
@@ -2293,6 +2305,10 @@ function Task(props: ToolProps<typeof TaskTool>) {
 
     if (!isRunning() && props.part.state.status === "completed") {
       content.push(`↳ ${formatCompletedSubagentDetail(tools().length, Locale.duration(duration()))}`)
+    }
+
+    if (props.metadata.sessionId) {
+      content.push(`  id ${props.metadata.sessionId}`)
     }
 
     return content.join("\n")
