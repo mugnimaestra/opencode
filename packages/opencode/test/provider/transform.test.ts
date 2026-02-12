@@ -620,6 +620,116 @@ describe("ProviderTransform.schema - gemini non-object properties removal", () =
   })
 })
 
+describe("ProviderTransform.schema - universal array items fix", () => {
+  test("adds missing items for OpenAI model", () => {
+    const openaiModel = {
+      providerID: "openai",
+      api: { id: "gpt-4.1" },
+    } as any
+
+    const schema = {
+      type: "object",
+      properties: {
+        values: { type: "array" },
+      },
+    } as any
+
+    const result = ProviderTransform.schema(openaiModel, schema) as any
+    expect(result.properties.values.items).toBeDefined()
+    expect(result.properties.values.items.type).toBe("string")
+  })
+
+  test("adds items with type for nested arrays on Copilot model", () => {
+    const copilotModel = {
+      providerID: "github-copilot",
+      api: { id: "gpt-4.1" },
+    } as any
+
+    const schema = {
+      type: "object",
+      properties: {
+        values: {
+          type: "array",
+          items: { type: "array" },
+        },
+      },
+    } as any
+
+    const result = ProviderTransform.schema(copilotModel, schema) as any
+    expect(result.properties.values.items.items).toBeDefined()
+    expect(result.properties.values.items.items.type).toBe("string")
+  })
+
+  test("handles 2D array with empty inner items for Azure model", () => {
+    const azureModel = {
+      providerID: "azure",
+      api: { id: "gpt-4" },
+    } as any
+
+    const schema = {
+      type: "object",
+      properties: {
+        values: {
+          type: "array",
+          items: {
+            type: "array",
+            items: {},
+          },
+        },
+      },
+    } as any
+
+    const result = ProviderTransform.schema(azureModel, schema) as any
+    expect(result.properties.values.items.items.type).toBe("string")
+  })
+
+  test("preserves existing array items type", () => {
+    const openaiModel = {
+      providerID: "openai",
+      api: { id: "gpt-4.1" },
+    } as any
+
+    const schema = {
+      type: "object",
+      properties: {
+        numbers: {
+          type: "array",
+          items: { type: "number" },
+        },
+      },
+    } as any
+
+    const result = ProviderTransform.schema(openaiModel, schema) as any
+    expect(result.properties.numbers.items.type).toBe("number")
+  })
+
+  test("fixes deeply nested arrays for Anthropic model", () => {
+    const anthropicModel = {
+      providerID: "anthropic",
+      api: { id: "claude-sonnet-4-20250514" },
+    } as any
+
+    const schema = {
+      type: "object",
+      properties: {
+        matrix: {
+          type: "array",
+          items: {
+            type: "array",
+            items: {
+              type: "array",
+            },
+          },
+        },
+      },
+    } as any
+
+    const result = ProviderTransform.schema(anthropicModel, schema) as any
+    expect(result.properties.matrix.items.items.items).toBeDefined()
+    expect(result.properties.matrix.items.items.items.type).toBe("string")
+  })
+})
+
 describe("ProviderTransform.message - DeepSeek reasoning content", () => {
   test("DeepSeek with tool calls includes reasoning_content in providerOptions", () => {
     const msgs = [

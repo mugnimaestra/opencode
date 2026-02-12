@@ -118,10 +118,22 @@ export function Session() {
   const promptRef = usePromptRef()
   const session = createMemo(() => sync.session.get(route.sessionID))
   const children = createMemo(() => {
-    const parentID = session()?.parentID ?? session()?.id
-    return sync.data.session
-      .filter((x) => x.parentID === parentID || x.id === parentID)
-      .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    const rootID = session()?.parentID ?? session()?.id
+    const all = sync.data.session
+    const result = all.filter((x) => x.id === rootID)
+    const seen = new Set(result.map((x) => x.id))
+    const queue = [...seen]
+    while (queue.length) {
+      const id = queue.shift()!
+      for (const s of all) {
+        if (s.parentID === id && !seen.has(s.id)) {
+          seen.add(s.id)
+          result.push(s)
+          queue.push(s.id)
+        }
+      }
+    }
+    return result.toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   })
   const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
   const permissions = createMemo(() => {
@@ -1929,6 +1941,9 @@ function Task(props: ToolProps<typeof TaskTool>) {
             <text style={{ fg: theme.textMuted }}>
               {props.input.description} ({tools().length} toolcalls)
             </text>
+            <Show when={props.metadata.sessionId}>
+              <text style={{ fg: theme.textMuted }}>id {props.metadata.sessionId}</text>
+            </Show>
             <Show when={current()}>
               {(item) => {
                 const title = item().state.status === "completed" ? (item().state as any).title : ""

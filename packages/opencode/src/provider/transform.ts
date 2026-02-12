@@ -895,6 +895,34 @@ export namespace ProviderTransform {
     }
     */
 
+    // Universal: ensure all array types have valid items (required by OpenAI, Copilot, Azure, etc.)
+    const sanitizeArrayItems = (obj: any): any => {
+      if (obj === null || typeof obj !== "object") return obj
+      if (Array.isArray(obj)) return obj.map(sanitizeArrayItems)
+
+      const result: any = {}
+      for (const [key, value] of Object.entries(obj)) {
+        if (typeof value === "object" && value !== null) {
+          result[key] = sanitizeArrayItems(value)
+        } else {
+          result[key] = value
+        }
+      }
+
+      if (result.type === "array") {
+        if (result.items == null) {
+          result.items = {}
+        }
+        if (typeof result.items === "object" && !Array.isArray(result.items) && !result.items.type) {
+          result.items.type = "string"
+        }
+      }
+
+      return result
+    }
+
+    schema = sanitizeArrayItems(schema)
+
     // Convert integer enums to string enums for Google/Gemini
     if (model.providerID === "google" || model.api.id.includes("gemini")) {
       const sanitizeGemini = (obj: any): any => {
