@@ -895,7 +895,9 @@ export namespace SessionPrompt {
           }
         }
 
-        const truncated = await Truncate.output(textParts.join("\n\n"), {}, input.agent)
+        const text =
+          textParts.join("\n\n") || (attachments.length > 0 ? `[Tool returned ${attachments.length} image(s)]` : "")
+        const truncated = await Truncate.output(text, {}, input.agent)
         const metadata = {
           ...(result.metadata ?? {}),
           truncated: truncated.truncated,
