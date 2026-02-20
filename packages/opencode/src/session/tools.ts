@@ -177,7 +177,10 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             }
           }
 
-          const truncated = yield* truncate.output(textParts.join("\n\n"), {}, input.agent)
+          const text =
+            textParts.join("\n\n") ||
+            (attachments.length > 0 ? `[Tool returned ${attachments.length} image(s)]` : "")
+          const truncated = yield* truncate.output(text, {}, input.agent)
           const metadata = {
             ...result.metadata,
             truncated: truncated.truncated,
