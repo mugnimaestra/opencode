@@ -71,6 +71,17 @@ const FIXTURES = {
     `data: {"choices":[{"finish_reason":"tool_calls","index":0,"delta":{"content":null,"role":"assistant","tool_calls":[{"function":{"arguments":"{}","name":"read_file"},"id":"call_reasoning_only_2","index":1,"type":"function"}]}}],"created":1769917420,"id":"opaque-only","usage":{"completion_tokens":12,"prompt_tokens":123,"prompt_tokens_details":{"cached_tokens":0},"total_tokens":135,"reasoning_tokens":0},"model":"gemini-3-flash-preview"}`,
     `data: [DONE]`,
   ],
+
+  // Case where multiple reasoning_opaque values are sent in a single response
+  // This handles the edge case where Copilot sends multiple thinking sessions
+  multipleReasoningOpaques: [
+    `data: {"choices":[{"index":0,"delta":{"content":null,"role":"assistant","reasoning_text":"First thinking session...\\n\\n"}}],"created":1767000000,"id":"test-multi-opaque","usage":{"completion_tokens":0,"prompt_tokens":0,"prompt_tokens_details":{"cached_tokens":0},"total_tokens":0,"reasoning_tokens":0},"model":"gemini-2.5-pro"}`,
+    `data: {"choices":[{"index":0,"delta":{"content":null,"role":"assistant","reasoning_opaque":"opaque-first-123"}}],"created":1767000001,"id":"test-multi-opaque","usage":{"completion_tokens":0,"prompt_tokens":0,"prompt_tokens_details":{"cached_tokens":0},"total_tokens":0,"reasoning_tokens":0},"model":"gemini-2.5-pro"}`,
+    `data: {"choices":[{"index":0,"delta":{"content":null,"role":"assistant","reasoning_text":"Second thinking session...\\n\\n"}}],"created":1767000002,"id":"test-multi-opaque","usage":{"completion_tokens":0,"prompt_tokens":0,"prompt_tokens_details":{"cached_tokens":0},"total_tokens":0,"reasoning_tokens":0},"model":"gemini-2.5-pro"}`,
+    `data: {"choices":[{"index":0,"delta":{"content":null,"role":"assistant","reasoning_opaque":"opaque-second-456"}}],"created":1767000003,"id":"test-multi-opaque","usage":{"completion_tokens":0,"prompt_tokens":0,"prompt_tokens_details":{"cached_tokens":0},"total_tokens":0,"reasoning_tokens":0},"model":"gemini-2.5-pro"}`,
+    `data: {"choices":[{"finish_reason":"stop","index":0,"delta":{"content":"Final answer","role":"assistant"}}],"created":1767000004,"id":"test-multi-opaque","usage":{"completion_tokens":50,"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":0},"total_tokens":150,"reasoning_tokens":20},"model":"gemini-2.5-pro"}`,
+    `data: [DONE]`,
+  ],
 }
 
 function createMockFetch(chunks: string[]) {
@@ -532,6 +543,68 @@ describe("doStream", () => {
 
     const rawChunks = parts.filter((p) => p.type === "raw")
     expect(rawChunks.length).toBeGreaterThan(0)
+  })
+
+  test("should handle multiple reasoning_opaque values by creating separate sessions", async () => {
+    const mockFetch = createMockFetch(FIXTURES.multipleReasoningOpaques)
+    const model = createModel(mockFetch)
+
+    const { stream } = await model.doStream({
+      prompt: TEST_PROMPT,
+      includeRawChunks: false,
+    })
+
+    const parts = await convertReadableStreamToArray(stream)
+
+    // Should have two reasoning sessions
+    const reasoningStarts = parts.filter((p) => p.type === "reasoning-start")
+    const reasoningEnds = parts.filter((p) => p.type === "reasoning-end")
+
+    expect(reasoningStarts).toHaveLength(2)
+    expect(reasoningEnds).toHaveLength(2)
+
+    // First session should be reasoning-0
+    expect(reasoningStarts[0]).toMatchObject({
+      type: "reasoning-start",
+      id: "reasoning-0",
+    })
+    // First reasoning-end should have first opaque
+    expect(reasoningEnds[0]).toMatchObject({
+      type: "reasoning-end",
+      id: "reasoning-0",
+      providerMetadata: {
+        copilot: {
+          reasoningOpaque: "opaque-first-123",
+        },
+      },
+    })
+
+    // Second session should be reasoning-1
+    expect(reasoningStarts[1]).toMatchObject({
+      type: "reasoning-start",
+      id: "reasoning-1",
+    })
+    // Second reasoning-end should have second opaque
+    expect(reasoningEnds[1]).toMatchObject({
+      type: "reasoning-end",
+      id: "reasoning-1",
+      providerMetadata: {
+        copilot: {
+          reasoningOpaque: "opaque-second-456",
+        },
+      },
+    })
+
+    // Finish should have the last opaque (for API continuation)
+    const finish = parts.find((p) => p.type === "finish")
+    expect(finish).toMatchObject({
+      type: "finish",
+      providerMetadata: {
+        copilot: {
+          reasoningOpaque: "opaque-second-456",
+        },
+      },
+    })
   })
 })
 

@@ -374,6 +374,8 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
     const providerOptionsName = this.providerOptionsName
     let isActiveReasoning = false
     let isActiveText = false
+    let reasoningIndex = 0
+    const reasoningOpaques: string[] = []
     let reasoningOpaque: string | undefined
 
     return {
@@ -467,14 +469,18 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
 
             // Capture reasoning_opaque for Copilot multi-turn reasoning
             if (delta.reasoning_opaque) {
-              if (reasoningOpaque != null) {
-                throw new InvalidResponseDataError({
-                  data: delta,
-                  message:
-                    "Multiple reasoning_opaque values received in a single response. Only one thinking part per response is supported.",
+              if (isActiveReasoning) {
+                // End current reasoning session with this opaque value
+                controller.enqueue({
+                  type: "reasoning-end",
+                  id: `reasoning-${reasoningIndex}`,
+                  providerMetadata: { copilot: { reasoningOpaque: delta.reasoning_opaque } },
                 })
+                isActiveReasoning = false
+                reasoningIndex++
               }
               reasoningOpaque = delta.reasoning_opaque
+              reasoningOpaques.push(delta.reasoning_opaque)
             }
 
             // enqueue reasoning before text deltas (Copilot uses reasoning_text):
@@ -483,14 +489,14 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
               if (!isActiveReasoning) {
                 controller.enqueue({
                   type: "reasoning-start",
-                  id: "reasoning-0",
+                  id: `reasoning-${reasoningIndex}`,
                 })
                 isActiveReasoning = true
               }
 
               controller.enqueue({
                 type: "reasoning-delta",
-                id: "reasoning-0",
+                id: `reasoning-${reasoningIndex}`,
                 delta: reasoningContent,
               })
             }
@@ -501,7 +507,7 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
               if (isActiveReasoning && !isActiveText) {
                 controller.enqueue({
                   type: "reasoning-end",
-                  id: "reasoning-0",
+                  id: `reasoning-${reasoningIndex}`,
                   providerMetadata: reasoningOpaque ? { copilot: { reasoningOpaque } } : undefined,
                 })
                 isActiveReasoning = false
@@ -529,7 +535,7 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
               if (isActiveReasoning) {
                 controller.enqueue({
                   type: "reasoning-end",
-                  id: "reasoning-0",
+                  id: `reasoning-${reasoningIndex}`,
                   providerMetadata: reasoningOpaque ? { copilot: { reasoningOpaque } } : undefined,
                 })
                 isActiveReasoning = false
@@ -648,7 +654,7 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
             if (isActiveReasoning) {
               controller.enqueue({
                 type: "reasoning-end",
-                id: "reasoning-0",
+                id: `reasoning-${reasoningIndex}`,
                 // Include reasoning_opaque for Copilot multi-turn reasoning
                 providerMetadata: reasoningOpaque ? { copilot: { reasoningOpaque } } : undefined,
               })
