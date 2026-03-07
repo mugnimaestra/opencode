@@ -1,6 +1,5 @@
 import {
   batch,
-  createContext,
   createEffect,
   createMemo,
   createSignal,
@@ -11,7 +10,6 @@ import {
   Show,
   Switch,
   untrack,
-  useContext,
 } from "solid-js"
 import { Dynamic } from "solid-js/web"
 import path from "path"
@@ -92,6 +90,9 @@ import { SessionRetry } from "@/session/retry"
 import { getRevertDiffFiles } from "../../util/revert-diff"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap } from "../../keymap"
 import { PathFormatterProvider, usePathFormatter } from "../../context/path-format"
+import { SessionContext, use } from "./context"
+import { ToolPart as ToolPartComponent } from "./tool"
+import { toggle as registryToggle, toggleAll } from "./tool/registry"
 
 addDefaultParsers(parsers.parsers)
 
@@ -133,6 +134,11 @@ const sessionBindingCommands = [
   "session.toggle.timestamps",
   "session.toggle.thinking",
   "session.toggle.actions",
+  "session.tool.next",
+  "session.tool.prev",
+  "session.tool.toggle",
+  "session.tool.expand_all",
+  "session.tool.collapse_all",
   "session.toggle.scrollbar",
   "session.toggle.generic_tool_output",
   "session.first",
@@ -159,28 +165,6 @@ const sessionGlobalBindingCommands = [
 ] as const
 
 const sessionGlobalUnfocusedBindingCommands = ["session.first", "session.last"] as const
-
-const context = createContext<{
-  width: number
-  sessionID: string
-  conceal: () => boolean
-  thinkingMode: () => ThinkingMode
-  showThinking: () => boolean
-  showTimestamps: () => boolean
-  showDetails: () => boolean
-  showGenericToolOutput: () => boolean
-  userMessageIDs: () => ReadonlySet<string>
-  diffWrapMode: () => "word" | "none"
-  providers: () => ReadonlyMap<string, Provider>
-  sync: ReturnType<typeof useSync>
-  tui: ReturnType<typeof useTuiConfig>
-}>()
-
-function use() {
-  const ctx = useContext(context)
-  if (!ctx) throw new Error("useContext must be used within a Session component")
-  return ctx
-}
 
 export function Session() {
   const route = useRouteData("session")
@@ -439,6 +423,13 @@ export function Session() {
     const child = scroll.getChildren().find((c) => c.id === targetID)
     if (child) scroll.scrollBy(child.y - scroll.y - 1)
     dialog.clear()
+  }
+
+  const findTool = (direction: "next" | "prev") => {
+    const tools = scroll.getChildren().filter((child) => child.id?.startsWith("tool-"))
+    if (!tools.length) return
+    if (direction === "next") return tools.find((child) => child.y > scroll.y + 1) ?? tools[0]
+    return [...tools].reverse().find((child) => child.y < scroll.y - 1) ?? tools.at(-1)
   }
 
   function toBottom() {
@@ -748,6 +739,65 @@ export function Session() {
       category: "Session",
       run: () => {
         setShowDetails((prev) => !prev)
+        dialog.clear()
+      },
+    },
+    {
+      title: "Next tool call",
+      value: "session.tool.next",
+      category: "Session",
+      hidden: true,
+      run: () => {
+        const target = findTool("next")
+        if (target) scroll.scrollBy(target.y - scroll.y - 1)
+        dialog.clear()
+      },
+    },
+    {
+      title: "Previous tool call",
+      value: "session.tool.prev",
+      category: "Session",
+      hidden: true,
+      run: () => {
+        const target = findTool("prev")
+        if (target) scroll.scrollBy(target.y - scroll.y - 1)
+        dialog.clear()
+      },
+    },
+    {
+      title: "Toggle tool call",
+      value: "session.tool.toggle",
+      category: "Session",
+      hidden: true,
+      run: () => {
+        const children = scroll.getChildren()
+        const tools = children.filter((c) => c.id?.startsWith("tool-"))
+        const top = scroll.y
+        const nearest = tools.reduce((best, item) => {
+          if (!best) return item
+          return Math.abs(item.y - top) < Math.abs(best.y - top) ? item : best
+        }, tools[0])
+        if (nearest) registryToggle(nearest.id!.replace("tool-", ""))
+        dialog.clear()
+      },
+    },
+    {
+      title: "Expand all tool calls",
+      value: "session.tool.expand_all",
+      category: "Session",
+      hidden: true,
+      run: () => {
+        toggleAll((id) => registryToggle(id))
+        dialog.clear()
+      },
+    },
+    {
+      title: "Collapse all tool calls",
+      value: "session.tool.collapse_all",
+      category: "Session",
+      hidden: true,
+      run: () => {
+        toggleAll((id) => registryToggle(id))
         dialog.clear()
       },
     },
@@ -1170,7 +1220,7 @@ export function Session() {
 
   return (
     <PathFormatterProvider path={session()?.directory}>
-      <context.Provider
+      <SessionContext.Provider
         value={{
           get width() {
             return contentWidth()
@@ -1369,7 +1419,7 @@ export function Session() {
             </Switch>
           </Show>
         </box>
-      </context.Provider>
+      </SessionContext.Provider>
     </PathFormatterProvider>
   )
 }
@@ -1597,7 +1647,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
 
 const PART_MAPPING = {
   text: TextPart,
-  tool: ToolPart,
+  tool: ToolPartComponent,
   reasoning: ReasoningPart,
 }
 
@@ -1725,91 +1775,7 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
   )
 }
 
-// Pending messages moved to individual tool pending functions
-
-function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMessage }) {
-  const ctx = use()
-  const sync = useSync()
-
-  // Hide tool if showDetails is false and tool completed successfully
-  const shouldHide = createMemo(() => {
-    if (ctx.showDetails()) return false
-    if (props.part.state.status !== "completed") return false
-    return true
-  })
-
-  const toolprops = {
-    get metadata() {
-      return props.part.state.status === "pending" ? {} : (props.part.state.metadata ?? {})
-    },
-    get input() {
-      return props.part.state.input ?? {}
-    },
-    get output() {
-      return props.part.state.status === "completed" ? props.part.state.output : undefined
-    },
-    get permission() {
-      const permissions = sync.data.permission[props.message.sessionID] ?? []
-      const permissionIndex = permissions.findIndex((x) => x.tool?.callID === props.part.callID)
-      return permissions[permissionIndex]
-    },
-    get tool() {
-      return props.part.tool
-    },
-    get part() {
-      return props.part
-    },
-  }
-
-  return (
-    <Show when={!shouldHide()}>
-      <Switch>
-        <Match when={props.part.tool === ShellID.ToolID}>
-          <Shell {...toolprops} />
-        </Match>
-        <Match when={props.part.tool === "glob"}>
-          <Glob {...toolprops} />
-        </Match>
-        <Match when={props.part.tool === "read"}>
-          <Read {...toolprops} />
-        </Match>
-        <Match when={props.part.tool === "grep"}>
-          <Grep {...toolprops} />
-        </Match>
-        <Match when={props.part.tool === "webfetch"}>
-          <WebFetch {...toolprops} />
-        </Match>
-        <Match when={props.part.tool === "websearch"}>
-          <WebSearch {...toolprops} />
-        </Match>
-        <Match when={props.part.tool === "write"}>
-          <Write {...toolprops} />
-        </Match>
-        <Match when={props.part.tool === "edit"}>
-          <Edit {...toolprops} />
-        </Match>
-        <Match when={props.part.tool === "task"}>
-          <Task {...toolprops} />
-        </Match>
-        <Match when={props.part.tool === "apply_patch"}>
-          <ApplyPatch {...toolprops} />
-        </Match>
-        <Match when={props.part.tool === "todowrite"}>
-          <TodoWrite {...toolprops} />
-        </Match>
-        <Match when={props.part.tool === "question"}>
-          <Question {...toolprops} />
-        </Match>
-        <Match when={props.part.tool === "skill"}>
-          <Skill {...toolprops} />
-        </Match>
-        <Match when={true}>
-          <GenericTool {...toolprops} />
-        </Match>
-      </Switch>
-    </Show>
-  )
-}
+// Tool component moved to ./tool/dispatcher.tsx
 
 type ToolProps<T> = {
   input: Partial<Tool.InferParameters<T>>
