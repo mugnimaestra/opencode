@@ -170,7 +170,7 @@ function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, timeout?: number
   return dynamicTool({
     description: mcpTool.description ?? "",
     inputSchema: jsonSchema(schema),
-    execute: async (args: unknown) => {
+    execute: async (args: unknown, opts?: { abortSignal?: AbortSignal }) => {
       return client.callTool(
         {
           name: mcpTool.name,
@@ -180,6 +180,7 @@ function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, timeout?: number
         {
           resetTimeoutOnProgress: true,
           timeout,
+          signal: opts?.abortSignal,
         },
       )
     },

@@ -1746,6 +1746,18 @@ export function createStructuredOutputTool(input: {
     },
   })
 }
+
+/** @internal Exported for testing — determines whether the prompt loop should exit */
+export function shouldExitLoop(
+  lastUser: MessageV2.User | undefined,
+  lastAssistant: MessageV2.Assistant | undefined,
+): boolean {
+  if (!lastUser) return false
+  if (!lastAssistant?.finish) return false
+  if (["tool-calls", "unknown"].includes(lastAssistant.finish)) return false
+  return lastAssistant.parentID === lastUser.id
+}
+
 const bashRegex = /!`([^`]+)`/g
 // Match [Image N] as single token, quoted strings, or non-space sequences
 const argsRegex = /(?:\[Image\s+\d+\]|"[^"]*"|'[^']*'|[^\s"']+)/gi
