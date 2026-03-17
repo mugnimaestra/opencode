@@ -330,7 +330,36 @@ export const ReadTool = Tool.define<
         }
       }
 
-      if (isBinaryFile(filepath, sample)) {
+      const binary = isBinaryFile(filepath, sample)
+      const isVideo = mime.startsWith("video/") && binary
+      const isAudio = mime.startsWith("audio/") && binary
+      if (isVideo || isAudio) {
+        if (Number(stat.size) > 20 * 1024 * 1024)
+          return yield* Effect.fail(
+            new Error(
+              `File too large for media attachment (${Math.round(Number(stat.size) / 1024 / 1024)}MB). Maximum is 20MB: ${filepath}`,
+            ),
+          )
+        const msg = `${isVideo ? "Video" : "Audio"} read successfully`
+        return {
+          title,
+          output: msg,
+          metadata: {
+            preview: msg,
+            truncated: false,
+            loaded: loaded.map((item) => item.filepath),
+          },
+          attachments: [
+            {
+              type: "file" as const,
+              mime,
+              url: `data:${mime};base64,${Buffer.from(yield* fs.readFile(filepath)).toString("base64")}`,
+            },
+          ],
+        }
+      }
+
+      if (binary) {
         return yield* Effect.fail(new Error(`Cannot read binary file: ${filepath}`))
       }
 

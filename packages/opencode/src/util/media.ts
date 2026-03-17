@@ -5,7 +5,7 @@ export function isPdfAttachment(mime: string) {
 }
 
 export function isMedia(mime: string) {
-  return mime.startsWith("image/") || isPdfAttachment(mime)
+  return mime.startsWith("image/") || isPdfAttachment(mime) || mime.startsWith("video/") || mime.startsWith("audio/")
 }
 
 export function isImageAttachment(mime: string) {
