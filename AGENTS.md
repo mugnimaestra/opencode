@@ -10,6 +10,74 @@ Valid types are `feat`, `fix`, `docs`, `chore`, `refactor`, and `test`. Scopes a
 
 Examples: `fix(tui): simplify thinking toggle styling`, `docs: update contributing guide`, `chore(sdk): regenerate types`.
 
+## Building Local Binary
+
+Use the `build-local.sh` script at the repo root:
+
+```bash
+./build-local.sh
+```
+
+This automates: fetch → rebase onto `origin/dev` → install deps → build → copy → codesign → verify.
+
+### Versioning
+
+The script sets `OPENCODE_CHANNEL=latest` so the binary uses the **standard opencode.db** and a proper semver version (e.g., `1.4.3`) instead of a branch-specific prerelease like `0.0.0-my-own-opencode-20260410XXXXXX`.
+
+Without `OPENCODE_CHANNEL=latest`, the build defaults to the git branch name as the channel, which produces:
+
+- A prerelease version string (`0.0.0-{branch}-{timestamp}`)
+- A separate database file (`opencode-{branch}.db` instead of `opencode.db`)
+
+Always use `build-local.sh` or set `OPENCODE_CHANNEL=latest` when building locally.
+
+### Manual Build (if script unavailable)
+
+1. **Rebase onto latest origin/dev**:
+
+   ```bash
+   git fetch origin
+   git rebase origin/dev
+   ```
+
+2. **Sync dependencies** (required after rebase):
+
+   ```bash
+   bun install
+   ```
+
+3. **Build the binary** (from packages/opencode directory):
+
+   ```bash
+   cd packages/opencode && OPENCODE_CHANNEL=latest bun ./script/build.ts --single
+   ```
+
+4. **Copy to local binary directory**:
+
+   ```bash
+   cp packages/opencode/dist/opencode-darwin-arm64/bin/opencode ~/personal/opencode-binary/opencode
+   chmod +x ~/personal/opencode-binary/opencode
+   ```
+
+5. **Resign for macOS** (required after copy):
+
+   ```bash
+   codesign --force --sign - ~/personal/opencode-binary/opencode
+   ```
+
+6. **Verify**:
+   ```bash
+   ~/personal/opencode-binary/opencode --version
+   ```
+
+The built binary will be at `packages/opencode/dist/opencode-{os}-{arch}/bin/opencode`.
+
+### Rebase Conflict Resolution
+
+After rebasing onto `origin/dev`, you may encounter conflicts where upstream extracted code into new modules. If the rebase keeps the old inline copy alongside the new import, remove the duplicate old code. Common symptoms include "Duplicate declaration" TypeScript errors during build.
+
+If rebase is interrupted (stale `.git/rebase-merge` or `.git/rebase-apply`), run `git rebase --abort` first before retrying.
+
 ## Style Guide
 
 ### General Principles
@@ -150,3 +218,19 @@ const table = sqliteTable("session", {
 - Keep delivery vocabulary explicit. Prompts steer by default and coalesce into the active activity at the next safe provider-turn boundary. Explicit `queue` inputs open FIFO future activities one at a time after the active activity settles.
 - Keep EventV2 replay owner claims separate from clustered Session execution ownership.
 - Keep the System Context algebra, registry, and built-ins in `src/system-context`; keep Context Source producers with their observed domains, and keep Session History selection plus Context Epoch persistence Session-owned.
+
+## Troubleshooting
+
+### "Unknown component type: spinner" Error
+
+If you see `[Reconciler] Unknown component type: spinner` when starting a chat, the Bun bundler is including stale cached versions of `@opentui` packages from `node_modules/.bun/`. The `opentui-spinner` side-effect import (`import "opentui-spinner/solid"`) registers the spinner on one copy of the component catalogue, but `createElement` runs against a different (stale) copy.
+
+**Fix**: Remove stale cached versions and rebuild:
+
+```bash
+find node_modules/.bun -maxdepth 1 -name '@opentui+*' -not -name '*0.1.86*' -exec rm -rf {} +
+find node_modules/.bun -maxdepth 1 -name 'opentui-spinner*' -not -name '*0.0.6*' -exec rm -rf {} +
+cd packages/opencode && bun install && bun ./script/build.ts --single
+```
+
+Update the version numbers above to match whatever is current in `packages/opencode/package.json`.
