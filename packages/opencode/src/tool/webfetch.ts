@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { Parser } from "htmlparser2"
 import * as Tool from "./tool"
+import * as Image from "./image"
 import TurndownService from "turndown"
 import DESCRIPTION from "./webfetch.txt"
 import { isImageAttachment } from "@/util/media"
@@ -108,7 +109,22 @@ export const WebFetchTool = Tool.define(
           const title = `${params.url} (${contentType})`
 
           if (isImageAttachment(mime)) {
-            const base64Content = Buffer.from(arrayBuffer).toString("base64")
+            const raw = Buffer.from(arrayBuffer)
+            let url = `data:${mime};base64,${raw.toString("base64")}`
+            let type = mime
+
+            const model = ctx.extra?.["model"] as
+              | { providerID?: string; options?: { max_prompt_image_size?: number } }
+              | undefined
+            const limit = model?.options?.max_prompt_image_size
+            if (limit && model?.providerID === "github-copilot") {
+              const result = yield* Effect.promise(() => Image.resize(raw, limit))
+              if (result) {
+                url = `data:${result.mime};base64,${result.data.toString("base64")}`
+                type = result.mime
+              }
+            }
+
             return {
               title,
               output: "Image fetched successfully",
@@ -116,8 +132,8 @@ export const WebFetchTool = Tool.define(
               attachments: [
                 {
                   type: "file" as const,
-                  mime,
-                  url: `data:${mime};base64,${base64Content}`,
+                  mime: type,
+                  url,
                 },
               ],
             }

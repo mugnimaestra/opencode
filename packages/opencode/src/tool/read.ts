@@ -9,8 +9,9 @@ import { InstanceState } from "@/effect/instance-state"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { Instruction } from "../session/instruction"
 import { Search } from "@opencode-ai/core/filesystem/search"
-import { isPdfAttachment, sniffAttachmentMime } from "@/util/media"
+import { isImageAttachment, isPdfAttachment, sniffAttachmentMime } from "@/util/media"
 import { Reference } from "@/reference/reference"
+import * as Image from "./image"
 
 const DEFAULT_READ_LIMIT = 2000
 const MAX_LINE_LENGTH = 2000
@@ -18,7 +19,6 @@ const MAX_LINE_SUFFIX = `... (line truncated to ${MAX_LINE_LENGTH} chars)`
 const MAX_BYTES = 50 * 1024
 const MAX_BYTES_LABEL = `${MAX_BYTES / 1024} KB`
 const SAMPLE_BYTES = 4096
-const SUPPORTED_IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"])
 
 class ReadStop extends Schema.TaggedErrorClass<ReadStop>()("ReadStop", {}) {}
 
@@ -307,11 +307,28 @@ export const ReadTool = Tool.define<
       const sample = yield* readSample(filepath, Number(stat.size), SAMPLE_BYTES)
 
       const mime = sniffAttachmentMime(sample, FSUtil.mimeType(filepath))
-      const isImage = SUPPORTED_IMAGE_MIMES.has(mime)
+      const isImage = isImageAttachment(mime)
 
       if (isImage || isPdfAttachment(mime)) {
-        const bytes = yield* fs.readFile(filepath)
         const msg = isPdfAttachment(mime) ? "PDF read successfully" : "Image read successfully"
+        const raw = Buffer.from(yield* fs.readFile(filepath))
+        let url = `data:${mime};base64,${raw.toString("base64")}`
+        let type = mime
+
+        if (isImageAttachment(mime)) {
+          const model = ctx.extra?.["model"] as
+            | { providerID?: string; options?: { max_prompt_image_size?: number } }
+            | undefined
+          const limit = model?.options?.max_prompt_image_size
+          if (limit && model?.providerID === "github-copilot") {
+            const result = yield* Effect.promise(() => Image.resize(raw, limit))
+            if (result) {
+              url = `data:${result.mime};base64,${result.data.toString("base64")}`
+              type = result.mime
+            }
+          }
+        }
+
         return {
           title,
           output: msg,
@@ -323,8 +340,8 @@ export const ReadTool = Tool.define<
           attachments: [
             {
               type: "file" as const,
-              mime,
-              url: `data:${mime};base64,${Buffer.from(bytes).toString("base64")}`,
+              mime: type,
+              url,
             },
           ],
         }

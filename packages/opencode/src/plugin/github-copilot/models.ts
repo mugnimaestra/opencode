@@ -138,7 +138,10 @@ function build(key: string, remote: SelectableItem, url: string, prev?: Model): 
         write: 0,
       },
     },
-    options: prev?.options ?? {},
+    options: {
+      ...prev?.options,
+      max_prompt_image_size: remote.capabilities.limits.vision?.max_prompt_image_size,
+    },
     headers: prev?.headers ?? {},
     release_date:
       prev?.release_date ??
