@@ -116,9 +116,11 @@ export const WebFetchTool = Tool.define(
             const model = ctx.extra?.["model"] as
               | { providerID?: string; options?: { max_prompt_image_size?: number } }
               | undefined
-            const limit = model?.options?.max_prompt_image_size
-            if (limit && model?.providerID === "github-copilot") {
-              const result = yield* Effect.promise(() => Image.resize(raw, limit))
+            if (model?.providerID === "github-copilot") {
+              const maxBytes = model.options?.max_prompt_image_size
+              const result = yield* Effect.promise(() =>
+                Image.resize(raw, { maxBytes, maxDimension: Image.CLAUDE_SAFE_DIMENSION }),
+              )
               if (result) {
                 url = `data:${result.mime};base64,${result.data.toString("base64")}`
                 type = result.mime
