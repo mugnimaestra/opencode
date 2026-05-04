@@ -32,6 +32,9 @@ import * as DateTime from "effect/DateTime"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { toolFileSourceFromUri, Usage, type LLMEvent } from "@opencode-ai/llm"
 import { ToolOutput } from "@opencode-ai/core/tool-output"
+import path from "path"
+import fs from "node:fs/promises"
+import { Global } from "@opencode-ai/core/global"
 
 const DOOM_LOOP_THRESHOLD = 3
 const log = Log.create({ service: "session.processor" })
@@ -573,7 +576,34 @@ export const layer = Layer.effect(
               yield* failToolCall(value.id, value.result.value)
               return
             }
-            const rawOutput = toolResultOutput(value)
+            const rawOutput = value.providerExecuted
+              ? yield* Effect.gen(function* () {
+                  const raw = value.result.value
+                  const result = isRecord(raw) && typeof raw.result === "string" ? raw.result : undefined
+                  if (result && result.length > 1000) {
+                    const imageDir = path.join(Global.Path.data, "images")
+                    yield* Effect.promise(() => fs.mkdir(imageDir, { recursive: true }))
+                    const filepath = path.join(imageDir, `${ctx.sessionID}-${Date.now()}.png`)
+                    yield* Effect.promise(() => fs.writeFile(filepath, Buffer.from(result, "base64")))
+                    return {
+                      title: "Generated image",
+                      output: filepath,
+                      metadata: {},
+                      attachments: [
+                        {
+                          id: PartID.ascending(),
+                          sessionID: ctx.sessionID,
+                          messageID: ctx.assistantMessage.id,
+                          type: "file" as const,
+                          mime: "image/png",
+                          url: `file://${filepath}`,
+                        },
+                      ],
+                    }
+                  }
+                  return toolResultOutput(value)
+                })
+              : toolResultOutput(value)
             const normalized = yield* Effect.forEach(rawOutput.attachments ?? [], (attachment) =>
               attachment.mime.startsWith("image/")
                 ? image.normalize(attachment).pipe(

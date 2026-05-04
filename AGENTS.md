@@ -78,6 +78,8 @@ After rebasing onto `origin/dev`, you may encounter conflicts where upstream ext
 
 If rebase is interrupted (stale `.git/rebase-merge` or `.git/rebase-apply`), run `git rebase --abort` first before retrying.
 
+For ripgrep/archive zip conflicts, keep upstream `src/file/ripgrep.ts` Effect Schema and `@opencode-ai/core/*` imports, then port only the `.zip` extraction branch via `Archive.extractZip(...)` wrapped in `Effect.tryPromise`. Keep `src/util/archive.ts` as a flat module with `export * as Archive from "./archive"`.
+
 ## Style Guide
 
 ### General Principles

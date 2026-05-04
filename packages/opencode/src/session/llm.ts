@@ -28,6 +28,7 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
+import { imageGeneration } from "@ai-sdk/openai/internal"
 
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
@@ -115,6 +116,13 @@ const live: Layer.Layer<
         flags,
         isWorkflow,
       })
+
+      // Inject provider-defined image generation tool for OpenAI models with
+      // image output capability. This enables models served via OpenAI's
+      // Responses API (e.g. GPT-5.x via 9router) to generate images inline.
+      if (input.model.capabilities.output.image && input.model.api.npm === "@ai-sdk/openai") {
+        prepared.tools["openai_image_generation"] = imageGeneration()
+      }
 
       // Wire up toolExecutor for DWS workflow models so that tool calls
       // from the workflow service are executed via opencode's tool system

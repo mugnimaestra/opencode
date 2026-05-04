@@ -35,3 +35,4 @@ tsconfig.tsbuildinfo
 plan-exec/
 scrape-chutes-*.js
 temp.md
+.opencode/
