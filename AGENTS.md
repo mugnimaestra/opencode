@@ -221,6 +221,38 @@ const table = sqliteTable("session", {
 - Keep EventV2 replay owner claims separate from clustered Session execution ownership.
 - Keep the System Context algebra, registry, and built-ins in `src/system-context`; keep Context Source producers with their observed domains, and keep Session History selection plus Context Epoch persistence Session-owned.
 
+## Custom Agent / Subagent Permissions (RECURRING REGRESSION)
+
+This is a recurring regression that breaks on rebases. Re-verify the invariant below every time you rebase onto `origin/dev`.
+
+### Symptom
+
+Custom subagents defined in `~/.config/opencode/agents/*.md` (e.g. `explore-opus-4.7`) lose access to tools they explicitly allow in their frontmatter `permission:` block (`read`/`grep`/`glob`/`edit`/`bash`) when spawned via the `task` tool by a parent agent — especially orchestrators like `beast-orchestrator-*` that `deny` those tools.
+
+### Mechanism
+
+- Permission gating is **permission-only** (there is no per-agent tools list) and is **LAST-MATCH-WINS** via `findLast` in `packages/core/src/permission.ts`.
+- A subagent's runtime ruleset is `Permission.merge(subagent.permission, derivedSessionPermission)`.
+- Denies forwarded from the parent into the derived session permission land **last** and therefore override the subagent's own `allow` rules.
+
+### Canonical Fix Location
+
+`deriveSubagentSessionPermission` in `packages/opencode/src/agent/subagent-permissions.ts` (find by function name, not line number).
+
+### INVARIANT (re-verify after every rebase)
+
+A parent agent's `edit`/tool `deny` must **NOT** be forwarded into a subagent session for any permission the subagent explicitly `allow`s. Subagent self-declared allows win over inherited parent ceilings — **EXCEPT** where Plan Mode requires the ceiling: built-in `explore`/`general` do **not** declare `edit: allow`, so they still inherit the parent `edit` deny (Plan Mode read-only stays enforced).
+
+### Upstream Issue Chain
+
+`#26514 → #27201 → #27654` — watch these so future rebases can recognize related upstream churn around this code.
+
+### Verification
+
+- From `packages/opencode` run `bun test test/agent/` (specifically subagent permission tests like `plan-mode-subagent-bypass.test.ts`) plus `bun typecheck`.
+- Tests CANNOT run from repo root (guard `do-not-run-tests-from-root`).
+- Manual repro: define a custom agent with `edit: allow`, have an orchestrator agent (which has `edit: deny`) spawn it via the `task` tool, and confirm `edit`/`write` are available in the spawned subagent.
+
 ## Troubleshooting
 
 ### "Unknown component type: spinner" Error

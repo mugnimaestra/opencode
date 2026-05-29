@@ -192,11 +192,15 @@ it.effect("[#26700] controller self-restrictions do not erase executor permissio
 
 it.effect("subagent inherits parent session deny rules as hard runtime ceilings", () =>
   Effect.sync(() => {
+    // The executor does NOT explicitly allow `bash`, so the parent
+    // session's `bash: deny` is forwarded and remains a hard ceiling.
+    // (An explicit subagent `bash: allow` would override it per #27654 —
+    // see the [#27654] test below.)
     const executor = testAgent({
       name: "executor",
       mode: "subagent",
       permission: {
-        bash: "allow",
+        read: "allow",
       },
     })
     const effective = Permission.merge(
@@ -209,5 +213,66 @@ it.effect("subagent inherits parent session deny rules as hard runtime ceilings"
     )
 
     expect(Permission.evaluate("bash", "git status", effective).action).toBe("deny")
+  }),
+)
+
+it.effect("[#27654] subagent self-declared edit:allow wins over parent agent edit:deny", () =>
+  Effect.sync(() => {
+    const orchestrator = testAgent({ name: "orchestrator", mode: "primary", permission: { edit: "deny", bash: "deny" } })
+    const custom = testAgent({
+      name: "custom",
+      mode: "subagent",
+      permission: { edit: "allow", bash: "allow", read: "allow" },
+    })
+    const derived = deriveSubagentSessionPermission({
+      parentSessionPermission: [],
+      parentAgent: orchestrator,
+      subagent: custom,
+    })
+
+    // The parent agent's `edit: deny` is NOT forwarded because the subagent
+    // explicitly allows `edit`.
+    expect(derived.some((r) => r.permission === "edit" && r.action === "deny")).toBe(false)
+
+    const effective = Permission.merge(custom.permission, derived)
+    expect(Permission.evaluate("edit", "/some/file.ts", effective).action).toBe("allow")
+  }),
+)
+
+it.effect("[#26514] subagent without edit:allow still inherits parent agent edit:deny ceiling", () =>
+  Effect.sync(() => {
+    const orchestrator = testAgent({ name: "orchestrator", mode: "primary", permission: { edit: "deny", bash: "deny" } })
+    const plain = testAgent({ name: "plain", mode: "subagent", permission: { read: "allow" } })
+    const derived = deriveSubagentSessionPermission({
+      parentSessionPermission: [],
+      parentAgent: orchestrator,
+      subagent: plain,
+    })
+
+    // No explicit `edit: allow` on the subagent, so the parent's `edit: deny`
+    // is still forwarded as a hard ceiling.
+    expect(derived.some((r) => r.permission === "edit" && r.action === "deny")).toBe(true)
+
+    const effective = Permission.merge(plain.permission, derived)
+    expect(Permission.evaluate("edit", "/some/file.ts", effective).action).toBe("deny")
+  }),
+)
+
+it.effect("[#27654] parent session deny is not forwarded for a permission the subagent allows", () =>
+  Effect.sync(() => {
+    const sub = testAgent({ name: "sub", mode: "subagent", permission: { bash: "allow" } })
+    const parentSession = Permission.fromConfig({ bash: "deny", external_directory: "deny" })
+    const derived = deriveSubagentSessionPermission({
+      parentSessionPermission: parentSession,
+      parentAgent: undefined,
+      subagent: sub,
+    })
+
+    // `bash` deny is NOT forwarded because the subagent explicitly allows bash.
+    const effective = Permission.merge(sub.permission, derived)
+    expect(Permission.evaluate("bash", "git status", effective).action).toBe("allow")
+
+    // `external_directory` is forwarded unconditionally.
+    expect(derived.some((r) => r.permission === "external_directory")).toBe(true)
   }),
 )
