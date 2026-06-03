@@ -22,6 +22,8 @@ import { Question } from "@/question"
 import { errorMessage } from "@/util/error"
 import { Log } from "@opencode-ai/core/util/log"
 import { isRecord } from "@/util/record"
+import { ReasoningToolCall } from "./reasoning-tool-call"
+import { ulid } from "ulid"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionEvent } from "@opencode-ai/core/session/event"
@@ -1052,8 +1054,92 @@ export const layer = Layer.effect(
             Effect.ensuring(cleanup()),
           )
 
+          // Detect and execute tool calls embedded in reasoning blocks
+          if (!ctx.blocked && !ctx.assistantMessage.error && !ctx.needsCompaction && !aborted) {
+            const allParts = yield* MessageV2.parts(ctx.assistantMessage.id).pipe(
+              Effect.provideService(Database.Service, database),
+            )
+            const embedded: ReasoningToolCall.Parsed[] = []
+            for (const part of allParts) {
+              if (part.type !== "reasoning") continue
+              const calls = ReasoningToolCall.parse(part.text)
+              if (calls.length === 0) continue
+              embedded.push(...calls)
+              const stripped = ReasoningToolCall.strip(part.text)
+              if (stripped !== part.text) {
+                part.text = stripped
+                yield* session.updatePart(part)
+              }
+            }
+            if (embedded.length > 0) {
+              slog.info("detected embedded tool calls in reasoning", {
+                count: embedded.length,
+                tools: embedded.map((c) => c.tool),
+              })
+              for (const call of embedded) {
+                if (aborted) break
+                const tool = streamInput.tools[call.tool]
+                if (!tool?.execute) {
+                  slog.warn("embedded tool call references unknown tool", { tool: call.tool })
+                  continue
+                }
+                const id = ulid()
+                const part = yield* session.updatePart({
+                  id: PartID.ascending(),
+                  messageID: ctx.assistantMessage.id,
+                  sessionID: ctx.assistantMessage.sessionID,
+                  type: "tool",
+                  callID: id,
+                  tool: call.tool,
+                  state: {
+                    status: "running",
+                    input: call.input,
+                    time: { start: Date.now() },
+                  },
+                })
+                try {
+                  const result = (yield* Effect.promise(() =>
+                    tool.execute!(call.input, {
+                      toolCallId: id,
+                      abortSignal: new AbortController().signal,
+                      messages: streamInput.messages,
+                    }),
+                  )) as { output: string; title: string; metadata: Record<string, any>; attachments?: SessionV1.FilePart[] }
+                  yield* session.updatePart({
+                    ...part,
+                    state: {
+                      status: "completed",
+                      input: call.input,
+                      output: result.output,
+                      title: result.title,
+                      metadata: result.metadata,
+                      time: { start: part.state.time.start, end: Date.now() },
+                      attachments: result.attachments,
+                    },
+                  })
+                } catch (e: any) {
+                  if (e instanceof PermissionV1.RejectedError || e instanceof Question.RejectedError) {
+                    ctx.blocked = ctx.shouldBreak
+                  }
+                  yield* session.updatePart({
+                    ...part,
+                    state: {
+                      status: "error",
+                      input: call.input,
+                      error: e.toString(),
+                      time: { start: part.state.time.start, end: Date.now() },
+                    },
+                  })
+                }
+              }
+              if (!ctx.blocked) {
+                ctx.assistantMessage.finish = "tool-calls"
+              }
+            }
+          }
+
           if (ctx.needsCompaction) return "compact"
-          if (ctx.blocked || ctx.assistantMessage.error) return "stop"
+          if (ctx.blocked || ctx.assistantMessage.error || aborted) return "stop"
           return "continue"
         })
       })
